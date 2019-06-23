@@ -18,7 +18,7 @@ class venafi_cred {
 class venafi_cert {
     hidden [int]$MaxRetry = 3
     hidden [int]$RetryTimeout = 10
-    hidden [string]$VenafiUri = "https://chome.cz/vedsdk"
+    hidden [string]$VenafiUri = "https://home.cz/vedsdk"
     hidden [string]$MandatorySubject = "OU=Test,O=Home,L=Prague,S=Prg,C=cz,E=devops@musec.sk"
     hidden [string]$Policy = "\VED\Policy\SDKTest"
     hidden [int]$KeySize = 2048
@@ -57,8 +57,7 @@ class venafi_cert {
             $response = Invoke-WebRequest -Method POST -Uri "$($this.venafiuri)/Authorize/" -Headers $header -Body $body
             $this.api = ConvertFrom-Json -InputObject $response.Content
             $resp = ($response.StatusCode -eq 200)
-        } catch {
-        }
+        } catch {}
         return $resp
     }
 
@@ -107,11 +106,17 @@ class venafi_cert {
                 $response = Invoke-WebRequest -Method POST -Uri "$($this.VenafiUri)/Certificates/Request" -Headers $header -Body $body
                 $this.CertificateDN = (ConvertFrom-Json -InputObject $response.Content).CertificateDN
                 $resp = ($response.StatusCode -eq 200)
-            } catch { Write-Host $_ }
+            } catch {
+                Write-Host $_
+            }
             if (!$resp) { Start-Sleep -Seconds $this.RetryTimeout }
             $retry += 1
         }
-        if (!$resp) { write-host "error submitting CSR" } else { Write-Host "Certificate submitted to CA"}
+        if (!$resp) {
+            write-host "error submitting CSR"
+        } else {
+            Write-Host "Certificate submitted to CA"
+        }
         return $resp
     }
     [bool] download_casigned_csr() {
@@ -134,7 +139,7 @@ class venafi_cert {
                 }
                 $response = Invoke-WebRequest -Method GET -Uri "$($this.venafiuri)/Certificates/Retrieve$param" -Headers $header
                 $this.SignedCsr = $response.Content
-                $resp = $response.StatusCode -eq 200
+                $resp = ($response.StatusCode -eq 200)
             }
             catch {}
             if (!$resp) { Start-Sleep -Seconds $this.RetryTimeout }
@@ -187,7 +192,7 @@ class venafi_cert {
         }
         $pkcs10req = $certReq.CreateSigningRequest()
         $this.SelfSignedCsr  = "-----BEGIN CERTIFICATE REQUEST-----"
-        $this.SelfSignedCsr += $([System.Convert]::ToBase64String($pkcs10req))
+        $this.SelfSignedCsr += [regex]::split([System.Convert]::ToBase64String($pkcs10req), "(.{64})") | ? {$_}
         $this.SelfSignedCsr += "-----END CERTIFICATE REQUEST-----"
         Write-Host "Selfsigned certificate and CSR [$($this.SelfSignedCert.Thumbprint)] generated and stored to cert:\LocalMachine\Request"
     }
@@ -227,6 +232,7 @@ class venafi_cert {
     }
     [bool] create_casigned_certificate([string[]]$SanNames) {
         Write-Host "Creating new certificate"
+        # add local cpomputer hostname to SAN list
         $hostname = ([System.Net.Dns]::GetHostByName($env:computerName).HostName).toLowerInvariant()
         $resp = $false
         $hostexist = $false
@@ -255,6 +261,6 @@ class venafi_cert {
 }
 
 [venafi_cert]$crt = [venafi_cert]::new('test')
-$crt.create_casigned_certificate(@('test1.home.com','test2.home.com'))
+$crt.create_casigned_certificate(@('test1.home.cz','test2.home.cz'))
 
 
