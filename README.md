@@ -2,7 +2,7 @@
 create, submit and accept CA signed certificate in powershell
 
 I needed to automate creation of signed certificate for windows machine using Venafi API.
-Previously I was using CerReg util to create,request and accept certificates, but for this task I want to avoid using CerReg.
+Previously I was using [[CErtReq.Exe](https://docs.microsoft.com/en-us/windows-server/administration/windows-commands/certreq_1)] util to create,request and accept certificates, but for this task I want to avoid using CerReg.
 As first version I created powershell class. I basicaly copied processe followed by CertReq.
 
 1. GEnerate Public and Private key
