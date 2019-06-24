@@ -31,7 +31,6 @@ class venafi_cert {
     hidden [System.Security.Cryptography.X509Certificates.X509Certificate2]$SelfSignedCert
     hidden [string]$SelfSignedCsr
     hidden [byte[]]$SignedCsr
-
     hidden init() {
         $this.FriendlyName = "azs-$((New-Guid).Guid.Replace('-','').toUpperInvariant())"
     }
@@ -95,7 +94,7 @@ class venafi_cert {
             "X-Venafi-Api-Key" = $($this.api.ApiKey)
         }
         $body = @{
-            ObjectName = "$($this.FriendlyName)"
+            ObjectName = "$($this.FriendlyName)-$($this.SelfSignedCert.Thumbprint)"
             PolicyDN = "$($this.Policy)"
             PKCS10 = "$($this.SelfSignedCsr)"
         } | ConvertTo-Json -Compress
@@ -106,17 +105,11 @@ class venafi_cert {
                 $response = Invoke-WebRequest -Method POST -Uri "$($this.VenafiUri)/Certificates/Request" -Headers $header -Body $body
                 $this.CertificateDN = (ConvertFrom-Json -InputObject $response.Content).CertificateDN
                 $resp = ($response.StatusCode -eq 200)
-            } catch {
-                Write-Host $_
-            }
+            } catch { Write-Host $_ }
             if (!$resp) { Start-Sleep -Seconds $this.RetryTimeout }
             $retry += 1
         }
-        if (!$resp) {
-            write-host "error submitting CSR"
-        } else {
-            Write-Host "Certificate submitted to CA"
-        }
+        if (!$resp) { write-host "error submitting CSR" } else { Write-Host "Certificate submitted to CA"}
         return $resp
     }
     [bool] download_casigned_csr() {
@@ -139,62 +132,66 @@ class venafi_cert {
                 }
                 $response = Invoke-WebRequest -Method GET -Uri "$($this.venafiuri)/Certificates/Retrieve$param" -Headers $header
                 $this.SignedCsr = $response.Content
-                $resp = ($response.StatusCode -eq 200)
+                $resp = $response.StatusCode -eq 200
             }
             catch {}
             if (!$resp) { Start-Sleep -Seconds $this.RetryTimeout }
             $retry += 1
         }
-        if (!$resp) {  
-            Write-Host "can not retrieve signed CSR" 
+        if (!$resp) {
+            Write-Host "can not retrieve signed CSR"
         } else {
             Write-Host "Signed certificate [$($this.SelfSignedCert.Thumbprint)] downloaded from CA"
         }
         return $resp
     }
-    [void] generate_selfsigned_csr() {
+    [bool] generate_selfsigned_csr() {
         $this.generate_keypair()
+        $resp = $false
         $subject = "CN=$($this.SanNames[0]),$($this.MandatorySubject)"
-        # create RSA from KeyPair
-        $rsa = [System.Security.Cryptography.RSA]::Create($this.KeyPair.ExportParameters($true))
-        # Key Usage
-        $keyUsage = [System.Security.Cryptography.X509Certificates.X509KeyUsageExtension]::new( `
-            [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::KeyEncipherment -bor `
-            [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::DigitalSignature, `
-            $true `
-        )
-        # Enhanced Key Usage
-        $oid = [System.Security.Cryptography.OidCollection]::new()
-        [void]$oid.add([System.Security.Cryptography.Oid]::new("1.3.6.1.5.5.7.3.1","Server Authentication"))
-        [void]$oid.add([System.Security.Cryptography.Oid]::new("1.3.6.1.5.5.7.3.2","Client Authentication"))
-        # SAN
-        $san = [System.Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder]::new()
-        foreach ($dnsname in $this.SanNames) { $san.AddDnsName($dnsname) }
-        # Generate Certificate Request string
-        $certReq = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new( `
-            $subject, `
-            $rsa, `
-            [System.Security.Cryptography.HashAlgorithmName]::SHA256, `
-            [System.Security.Cryptography.RSASignaturePadding]::Pkcs1 `
-         )
-        $certReq.CertificateExtensions.Add($keyUsage)
-        $certReq.CertificateExtensions.Add([System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new($oid,$false))
-        $certReq.CertificateExtensions.Add($san.Build())
-        $this.SelfSignedCert = $certReq.CreateSelfSigned([System.DateTimeOffset]::Now, [System.DateTimeOffset]::Now.AddYears(1))
-        $this.SelfSignedCert.PrivateKey = $this.KeyPair
-        if (([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-            $store = [System.Security.Cryptography.X509Certificates.X509Store]::new('REQUEST',[System.Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine)
-            $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-            $store.Add($this.SelfSignedCert)
-            $store.Close()
-        } else {
-            Write-Warning "Session is not elevated. Can not store CSR in LocalComputer certificate store"
-        }
-        $pkcs10req = $certReq.CreateSigningRequest()
-        $this.SelfSignedCsr  = "-----BEGIN CERTIFICATE REQUEST-----"
-        $this.SelfSignedCsr += [regex]::split([System.Convert]::ToBase64String($pkcs10req), "(.{64})") | ? {$_}
-        $this.SelfSignedCsr += "-----END CERTIFICATE REQUEST-----"
-        Write-Host "Selfsigned certificate and CSR [$($this.SelfSignedCert.Thumbprint)] generated and stored to cert:\LocalMachine\Request"
+        try {
+            # create RSA from KeyPair
+            $rsa = [System.Security.Cryptography.RSA]::Create($this.KeyPair.ExportParameters($true))
+            # Key Usage
+            $keyUsage = [System.Security.Cryptography.X509Certificates.X509KeyUsageExtension]::new( `
+                [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::KeyEncipherment -bor `
+                [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::DigitalSignature, `
+                $true `
+            )
+            # Enhanced Key Usage
+            $oid = [System.Security.Cryptography.OidCollection]::new()
+            [void]$oid.add([System.Security.Cryptography.Oid]::new("1.3.6.1.5.5.7.3.1","Server Authentication"))
+            [void]$oid.add([System.Security.Cryptography.Oid]::new("1.3.6.1.5.5.7.3.2","Client Authentication"))
+            # SAN
+            $san = [System.Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder]::new()
+            foreach ($dnsname in $this.SanNames) { $san.AddDnsName($dnsname) }
+            # Generate Certificate Request string
+            $certReq = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new( `
+                $subject, `
+                $rsa, `
+                [System.Security.Cryptography.HashAlgorithmName]::SHA256, `
+                [System.Security.Cryptography.RSASignaturePadding]::Pkcs1 `
+            )
+            $certReq.CertificateExtensions.Add($keyUsage)
+            $certReq.CertificateExtensions.Add([System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new($oid,$false))
+            $certReq.CertificateExtensions.Add($san.Build())
+            $this.SelfSignedCert = $certReq.CreateSelfSigned([System.DateTimeOffset]::Now, [System.DateTimeOffset]::Now.AddYears(1))
+            $this.SelfSignedCert.PrivateKey = $this.KeyPair
+            if (([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+                $store = [System.Security.Cryptography.X509Certificates.X509Store]::new('REQUEST',[System.Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine)
+                $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+                $store.Add($this.SelfSignedCert)
+                $store.Close()
+            } else {
+                Write-Warning "Session is not elevated. Can not store CSR in LocalComputer certificate store"
+            }
+            $pkcs10req = $certReq.CreateSigningRequest()
+            $this.SelfSignedCsr  = "-----BEGIN CERTIFICATE REQUEST-----"
+            $this.SelfSignedCsr += [regex]::split( [System.Convert]::ToBase64String($pkcs10req), "(.{64})") | ? {$_}
+            $this.SelfSignedCsr += "-----END CERTIFICATE REQUEST-----"
+            $resp = $true
+        } catch {}
+        return $resp
     }
     [bool] accept_casigned_csr() {
         $resp = $false
@@ -232,7 +229,7 @@ class venafi_cert {
     }
     [bool] create_casigned_certificate([string[]]$SanNames) {
         Write-Host "Creating new certificate"
-        # add local cpomputer hostname to SAN list
+        $this.SanNames = @()
         $hostname = ([System.Net.Dns]::GetHostByName($env:computerName).HostName).toLowerInvariant()
         $resp = $false
         $hostexist = $false
@@ -241,20 +238,23 @@ class venafi_cert {
             $hostexist = ($hostexist -or ($dns -eq $hostname))
         }
         if (!$hostexist) {
-            $this.SanNames = $hostname + $SanNames
+            $this.SanNames += $hostname
             Write-Host "Local hostanem [$hostname] added to SAN names"
         }
-        if ($SanNames.Length -ge 1) {
-            $this.SanNames = $SanNames
+        $this.SanNames += $SanNames
+        if ($this.SanNames.Count -ge 1) {
             $this.FriendlyName += "-$($this.SanNames[0])"
-            $resp = $false
             $resp = $this.generate_selfsigned_csr()
-            $resp = $this.request_casigned_csr()
-            $resp = $this.download_casigned_csr()
-            $resp = $this.accept_casigned_csr()
+            if ($resp) { $resp = $this.request_casigned_csr() }
+            if ($resp) { $resp = $this.download_casigned_csr() }
+            if ($resp) { $resp = $this.accept_casigned_csr() }
+        } else {
+            Write-Host "at least 1  SAN name must be provided..."
         }
         if ($resp) {
             Write-Host "Certificate created..."
+        } else {
+            Write-Host "certificate ceation process failed..."
         }
         return $resp
     }
