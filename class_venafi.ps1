@@ -3,15 +3,12 @@ class venafi_apikey {
     [Datetime]$ValidUntil
 }
 class venafi_cred {
-    hidden [byte[]]$key = (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)
-    hidden [string]$encUsername = '76492d1116743f0423413b16050*'
-    hidden [string]$encPassword = '76492d1116743f0423413b16050*'
     venafi_cred() {}
     [string] username() {
-        return [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR((ConvertTo-SecureString -String $this.EncUsername -Key $this.key)))
+        return "<venafi username>"
     }
     [string] password() {
-        return [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR((ConvertTo-SecureString -String $this.EncPassword -Key $this.key)))
+        return "<venafi password>"
     }
 }
 
@@ -99,14 +96,17 @@ class venafi_cert {
             PKCS10 = "$($this.SelfSignedCsr)"
         } | ConvertTo-Json -Compress
         $retry = 1
-        Write-Host "Submitting selfsigned certificate [$($this.SelfSignedCert.Thumbprint)] to CA"
+        Write-Host "submitting selfsigned certificate [$($this.SelfSignedCert.Thumbprint)] to CA"
         while (($retry -le $this.maxRetry) -and (!$resp)) {
             try {
                 $response = Invoke-WebRequest -Method POST -Uri "$($this.VenafiUri)/Certificates/Request" -Headers $header -Body $body
                 $this.CertificateDN = (ConvertFrom-Json -InputObject $response.Content).CertificateDN
                 $resp = ($response.StatusCode -eq 200)
             } catch { Write-Host $_ }
-            if (!$resp) { Start-Sleep -Seconds $this.RetryTimeout }
+            if (!$resp) {
+                Write-Host "csr not ready yet, waiting $($this.RetryTimeout) seconds..."
+                Start-Sleep -Seconds $this.RetryTimeout
+            }
             $retry += 1
         }
         if (!$resp) { write-host "error submitting CSR" } else { Write-Host "Certificate submitted to CA"}
@@ -124,7 +124,6 @@ class venafi_cert {
         $retry = 0
         $resp = $false
         Write-Host "downloading signed certificate..."
-        $s_csr = [System.String]::Empty
         while (($retry -le $this.maxRetry) -and (!$resp)) {
             try {
                 if (!$this.validate()) {
@@ -135,13 +134,16 @@ class venafi_cert {
                 $resp = $response.StatusCode -eq 200
             }
             catch {}
-            if (!$resp) { Start-Sleep -Seconds $this.RetryTimeout }
+            if (!$resp) {
+                Write-Host "csr not ready yet, waiting $($this.RetryTimeout) seconds..."
+                Start-Sleep -Seconds $this.RetryTimeout
+            }
             $retry += 1
         }
         if (!$resp) {
             Write-Host "can not retrieve signed CSR"
         } else {
-            Write-Host "Signed certificate [$($this.SelfSignedCert.Thumbprint)] downloaded from CA"
+            Write-Host "signed certificate [$($this.SelfSignedCert.Thumbprint)] downloaded from CA"
         }
         return $resp
     }
@@ -183,7 +185,7 @@ class venafi_cert {
                 $store.Add($this.SelfSignedCert)
                 $store.Close()
             } else {
-                Write-Warning "Session is not elevated. Can not store CSR in LocalComputer certificate store"
+                Write-Warning "session is not elevated. san not store CSR in LocalComputer certificate store"
             }
             $pkcs10req = $certReq.CreateSigningRequest()
             $this.SelfSignedCsr  = "-----BEGIN CERTIFICATE REQUEST-----"
@@ -219,11 +221,11 @@ class venafi_cert {
                 }
             }
         } else {
-            Write-Warning "Session is not elevated. Can not store CSR in LocalComputer certificate store"
+            Write-Warning "session is not elevated. can not store CSR in LocalComputer certificate store"
         }
         #$pfx.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx,$PfxPassword) | Out-File -FilePath "c:\azstools\logs\test.pfx"
         if ($resp) {
-            Write-Host "Signed certificate accepted and moved to cert:\LocalMachine\My"
+            Write-Host "signed certificate accepted and moved to cert:\LocalMachine\My"
         }
         return $resp
     }
@@ -252,7 +254,7 @@ class venafi_cert {
             Write-Host "at least 1  SAN name must be provided..."
         }
         if ($resp) {
-            Write-Host "Certificate created..."
+            Write-Host "certificate created..."
         } else {
             Write-Host "certificate ceation process failed..."
         }
@@ -260,7 +262,8 @@ class venafi_cert {
     }
 }
 
-[venafi_cert]$crt = [venafi_cert]::new('test')
-$crt.create_casigned_certificate(@('test1.home.cz','test2.home.cz'))
+# Call custom object Venafi to request and store certificate
+$crt = [venafi_cert]::new()
 
-
+# By default computer hostmname is used as SAN, otionally  list of other DNS could be added to SAN
+$crt.create_casigned_certificate(@('test.home.cz'))
